@@ -41,9 +41,7 @@ def load_data():
     
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    # ★★★ 修正点: 認証ロジック ★★★
-    # Streamlit CloudのSecrets機能を使って認証情報を取得
-    # (secretsに情報がなければ、ローカルのjsonファイルを探しにいくハイブリッド仕様)
+    # 認証ロジック: Secrets (Cloud) か JSONファイル (Local) かを自動判定
     if "gcp_service_account" in st.secrets:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
     else:
@@ -66,32 +64,50 @@ def load_data():
     total_sheets = len(SHEET_NAMES)
     
     for i, sheet_name in enumerate(SHEET_NAMES):
-        status_text.text(f"データを読み込み中... {sheet_name}")
-        try:
-            worksheet = spreadsheet.worksheet(sheet_name)
-            rows = worksheet.get_all_values()
-            
-            emoji_probs = {}
-            start_row = 1 if rows and '%' in str(rows[0][1]) else 0
+        status_text.text(f"データを読み込み中... ({i+1}/{total_sheets}) {sheet_name}")
+        
+        # ★★★ 429エラー (読み込み制限) 対策のリトライロジック ★★★
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                worksheet = spreadsheet.worksheet(sheet_name)
+                rows = worksheet.get_all_values()
+                
+                emoji_probs = {}
+                # ヘッダー判定（1行目の2列目に'%'が含まれていればヘッダーありとみなす）
+                start_row = 1 if rows and len(rows) > 0 and len(rows[0]) > 1 and '%' in str(rows[0][1]) else 0
 
-            for row in rows[start_row:]:
-                for col_idx in [0, 2, 4]:
-                    if len(row) > col_idx + 1 and row[col_idx] and row[col_idx+1]:
-                        word = row[col_idx].strip()
-                        prob = parse_probability(row[col_idx+1])
-                        if prob > 0:
-                            emoji_probs[word] = prob
-                            all_words.add(word)
-            
-            emoji_probabilities[sheet_name] = emoji_probs
-            
-        except gspread.exceptions.WorksheetNotFound:
-            continue
-        except Exception as e:
-            print(f"Error loading {sheet_name}: {e}")
+                for row in rows[start_row:]:
+                    # 名詞(Col 0,1), 動詞(Col 2,3), 形容詞(Col 4,5)
+                    for col_idx in [0, 2, 4]:
+                        if len(row) > col_idx + 1 and row[col_idx] and row[col_idx+1]:
+                            word = row[col_idx].strip()
+                            prob = parse_probability(row[col_idx+1])
+                            if prob > 0:
+                                emoji_probs[word] = prob
+                                all_words.add(word)
+                
+                emoji_probabilities[sheet_name] = emoji_probs
+                break # 成功したらループを抜ける
+                
+            except gspread.exceptions.WorksheetNotFound:
+                break # シートがない場合はスキップ
+            except gspread.exceptions.APIError as e:
+                # 429エラーなら待機して再試行
+                if "429" in str(e):
+                    wait_time = (2 ** attempt) * 2  # 2, 4, 8, 16...秒待機
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error loading {sheet_name}: {e}")
+                    break
+            except Exception as e:
+                print(f"Unexpected error loading {sheet_name}: {e}")
+                break
+        
+        # API制限回避のため、次のシート読み込みまで少し待機
+        time.sleep(1.5)
         
         progress_bar.progress((i + 1) / total_sheets)
-        time.sleep(0.1)
 
     status_text.empty()
     progress_bar.empty()
@@ -131,7 +147,7 @@ def main():
             st.stop()
         
         if 'data_loaded' not in st.session_state:
-            with st.spinner("データベースを構築中..."):
+            with st.spinner("データベースを構築中... (これには数分かかります)"):
                 try:
                     emoji_probabilities, all_words, spreadsheet = load_data()
                     st.session_state['emoji_probabilities'] = emoji_probabilities
