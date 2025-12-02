@@ -10,7 +10,7 @@ import pandas as pd
 # ローカルで動かす場合の鍵ファイル名
 SERVICE_ACCOUNT_FILE = 'service_account.json'
 # ★書き換えてください (スプレッドシートID)
-SPREADSHEET_ID = '1P5Yx7tCPKIzicerO_9LlQBnupqdlDeKnKily2ZzVhY' 
+SPREADSHEET_ID = '1P5Yx7tCPKIzicerO_9LlQBnupqdlDeKnKily2ZzVhYg' 
 
 # 分析対象のシート名（絵文字）リスト
 SHEET_NAMES = [
