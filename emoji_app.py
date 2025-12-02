@@ -148,8 +148,7 @@ def on_emoji_click(selected_item):
         # 2. 候補リストを削除してリセット
         del st.session_state['current_candidates']
         
-        # 3. 成功メッセージを設定
-        st.session_state['save_success'] = f"✅ 「{selected_item}」を選択・記録しました！"
+        # 3. 成功メッセージの設定を削除しました
     else:
         st.session_state['save_error'] = f"保存エラー: {msg}"
 
@@ -236,8 +235,6 @@ def main():
             st.session_state['current_candidates'] = top5_candidates
             st.session_state['current_matched'] = matched_words_str
             
-            if 'save_success' in st.session_state:
-                del st.session_state['save_success']
             if 'save_error' in st.session_state:
                 del st.session_state['save_error']
 
@@ -267,10 +264,9 @@ def main():
                     args=(item,)
                 )
 
-    if 'save_success' in st.session_state:
-        st.success(st.session_state['save_success'])
     if 'save_error' in st.session_state:
         st.error(st.session_state['save_error'])
+        del st.session_state['save_error']
 
 if __name__ == "__main__":
     main()
