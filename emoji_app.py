@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import time
 import pandas as pd
-from janome.tokenizer import Tokenizer # ★追加: 形態素解析用
+from janome.tokenizer import Tokenizer # 形態素解析用
 
 # --- 設定項目 ---
 # ローカルで動かす場合の鍵ファイル名
@@ -93,7 +93,7 @@ def load_data():
     
     return emoji_keywords, all_words, spreadsheet
 
-# ★追加: Tokenizerのロードをキャッシュ化
+# Tokenizerのロードをキャッシュ化
 @st.cache_resource
 def load_tokenizer():
     return Tokenizer()
@@ -164,7 +164,7 @@ def main():
             emoji_keywords = st.session_state['emoji_keywords']
             all_words = st.session_state['all_words']
 
-            # ★変更: Janomeによる形態素解析で単語を抽出
+            # Janomeによる形態素解析で単語を抽出
             tokenizer = load_tokenizer()
             tokens = tokenizer.tokenize(input_text)
             
@@ -173,7 +173,6 @@ def main():
             # 文章の頭から順にトークンを見ていく
             for token in tokens:
                 # 辞書データと比較するために「基本形 (base_form)」を使用
-                # 例: "可愛くて" -> "可愛い", "猫" -> "猫"
                 word_base = token.base_form
                 
                 # 辞書に含まれている単語だけを抽出
@@ -182,7 +181,7 @@ def main():
             
             matched_words_str = ", ".join(sorted_words) if sorted_words else "なし"
 
-            # 2. 絵文字リストアップ
+            # 絵文字リストアップ
             candidates = []
             seen_emojis = set()
             for word in sorted_words:
@@ -208,10 +207,13 @@ def main():
         if not candidates:
             st.info("※ 単語から推測できる絵文字が見つかりませんでした。")
 
-        cols = st.columns(6) 
+        # 絵文字ボタンを並べる
+        # インデックスエラー対策: リストの長さにかかわらず、カラム数(6)で割った余りを使う
+        num_cols = 6
+        cols = st.columns(num_cols) 
         
         for i, item in enumerate(display_candidates):
-            with cols[i]:
+            with cols[i % num_cols]:  # ★ここを修正しました
                 label = item
                 
                 if st.button(label, key=f"btn_{i}", use_container_width=True):
