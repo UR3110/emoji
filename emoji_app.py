@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import time
 import pandas as pd
+from janome.tokenizer import Tokenizer # ★追加: 形態素解析用
 
 # --- 設定項目 ---
 # ローカルで動かす場合の鍵ファイル名
@@ -92,6 +93,11 @@ def load_data():
     
     return emoji_keywords, all_words, spreadsheet
 
+# ★追加: Tokenizerのロードをキャッシュ化
+@st.cache_resource
+def load_tokenizer():
+    return Tokenizer()
+
 def save_log(spreadsheet, input_text, candidate_emojis, matched_words_str, selected_emoji):
     """収集データシートにログを保存"""
     save_sheet_name = "収集データ"
@@ -140,7 +146,6 @@ def main():
             st.success("データ準備OK")
 
     # --- 入力フォーム (Session Stateと連携) ---
-    # 文章をプログラムから書き換えられるように、keyを設定します
     if 'input_text_val' not in st.session_state:
         st.session_state['input_text_val'] = ""
 
@@ -148,7 +153,7 @@ def main():
         "文章を入力してください", 
         height=100, 
         placeholder="例：猫が可愛くて最高に幸せ",
-        key="input_text_val" # keyを設定することでsession_state経由で値を操作可能に
+        key="input_text_val"
     )
 
     # 「絵文字を検索する」ボタン
@@ -159,15 +164,22 @@ def main():
             emoji_keywords = st.session_state['emoji_keywords']
             all_words = st.session_state['all_words']
 
-            # 1. 単語マッチングと順序特定
-            found_matches = []
-            for word in all_words:
-                idx = input_text.find(word)
-                if idx != -1:
-                    found_matches.append((idx, word))
+            # ★変更: Janomeによる形態素解析で単語を抽出
+            tokenizer = load_tokenizer()
+            tokens = tokenizer.tokenize(input_text)
             
-            found_matches.sort(key=lambda x: x[0])
-            sorted_words = [m[1] for m in found_matches]
+            sorted_words = []
+            
+            # 文章の頭から順にトークンを見ていく
+            for token in tokens:
+                # 辞書データと比較するために「基本形 (base_form)」を使用
+                # 例: "可愛くて" -> "可愛い", "猫" -> "猫"
+                word_base = token.base_form
+                
+                # 辞書に含まれている単語だけを抽出
+                if word_base in all_words:
+                    sorted_words.append(word_base)
+            
             matched_words_str = ", ".join(sorted_words) if sorted_words else "なし"
 
             # 2. 絵文字リストアップ
@@ -183,7 +195,6 @@ def main():
             st.session_state['current_candidates'] = candidates
             st.session_state['current_matched'] = matched_words_str
             
-            # メッセージリセット
             if 'save_success' in st.session_state:
                 del st.session_state['save_success']
 
@@ -203,11 +214,9 @@ def main():
             with cols[i]:
                 label = item
                 
-                # ボタンが押されたら
                 if st.button(label, key=f"btn_{i}", use_container_width=True):
                     
                     spreadsheet = st.session_state['spreadsheet']
-                    # 現在の入力欄の内容を取得（最新の状態）
                     current_input_val = st.session_state['input_text_val']
                     matched = st.session_state['current_matched']
                     candidates_to_log = candidates
@@ -216,22 +225,15 @@ def main():
                         success, msg = save_log(spreadsheet, current_input_val, candidates_to_log, matched, item)
                         
                         if success:
-                            # 1. 選んだ絵文字を文章の末尾に追加 (「なし」以外の場合)
                             if item != "なし":
                                 st.session_state['input_text_val'] += item
                             
-                            # 2. 候補リストを消去（ボタンを消す）
                             del st.session_state['current_candidates']
-                            
-                            # 3. 完了メッセージセット
                             st.session_state['save_success'] = f"✅ 「{item}」を選択・記録しました！"
-                            
-                            # 4. 画面を再描画して反映
                             st.rerun()
                         else:
                             st.error(f"保存エラー: {msg}")
 
-    # 保存完了メッセージの表示
     if 'save_success' in st.session_state:
         st.success(st.session_state['save_success'])
 
