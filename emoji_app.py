@@ -14,7 +14,6 @@ SERVICE_ACCOUNT_FILE = 'service_account.json'
 SPREADSHEET_ID = '1P5Yx7tCPKIzicerO_9LlQBnupqdlDeKnKily2ZzVhYg' 
 
 # 分析対象のシート名（絵文字）リスト
-# このリストの並び順が、スコア同点時の優先順位になります
 SHEET_NAMES = [
     "😀", "😁", "😂", "😃", "😄", "😅", "😆", "😇", "😈", "😉",
     "😊", "😋", "😌", "😍", "😎", "😏", "😐", "😑", "😒", "😓",
@@ -27,18 +26,9 @@ SHEET_NAMES = [
 
 # --- 関数定義 ---
 
-# 確率文字列を数値に変換する関数
-def parse_probability(prob_str):
-    if not prob_str: return 0.0
-    try:
-        clean_str = str(prob_str).replace('%', '').replace(',', '').strip()
-        return float(clean_str) / 100.0
-    except ValueError:
-        return 0.0
-
 @st.cache_resource
 def load_data():
-    """スプレッドシートから学習データを読み込む（確率スコア付き）"""
+    """スプレッドシートから学習データを読み込む"""
     
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
@@ -54,8 +44,7 @@ def load_data():
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     
-    # {絵文字: {単語: 確率, ...}}
-    emoji_probabilities = {}
+    emoji_keywords = {}
     all_words = set()
     
     progress_bar = st.progress(0)
@@ -72,19 +61,18 @@ def load_data():
                 worksheet = spreadsheet.worksheet(sheet_name)
                 rows = worksheet.get_all_values()
                 
-                emoji_probs = {}
+                keywords = set()
                 start_row = 1 if rows and len(rows) > 0 and len(rows[0]) > 1 and '%' in str(rows[0][1]) else 0
 
                 for row in rows[start_row:]:
                     for col_idx in [0, 2, 4]:
-                        if len(row) > col_idx + 1 and row[col_idx] and row[col_idx+1]:
+                        if len(row) > col_idx and row[col_idx]:
                             word = row[col_idx].strip()
-                            prob = parse_probability(row[col_idx+1])
-                            if word and prob > 0:
-                                emoji_probs[word] = prob
+                            if word:
+                                keywords.add(word)
                                 all_words.add(word)
                 
-                emoji_probabilities[sheet_name] = emoji_probs
+                emoji_keywords[sheet_name] = keywords
                 break
                 
             except gspread.exceptions.WorksheetNotFound:
@@ -103,7 +91,7 @@ def load_data():
     status_text.empty()
     progress_bar.empty()
     
-    return emoji_probabilities, all_words, spreadsheet
+    return emoji_keywords, all_words, spreadsheet
 
 # Tokenizerのロードをキャッシュ化
 @st.cache_resource
@@ -128,13 +116,39 @@ def save_log(spreadsheet, input_text, candidate_emojis, matched_words_str, selec
     except Exception as e:
         return False, str(e)
 
+# --- コールバック関数 (ここが修正のポイント) ---
+def on_emoji_click(selected_item):
+    """絵文字ボタンが押されたときに実行される関数"""
+    
+    # 必要なデータをセッションステートから取得
+    spreadsheet = st.session_state['spreadsheet']
+    input_txt = st.session_state['input_text_val']
+    matched = st.session_state['current_matched']
+    candidates = st.session_state['current_candidates']
+    
+    # 記録処理 (コールバック内ではspinnerが効かないことがあるため削除していますが処理は行われます)
+    success, msg = save_log(spreadsheet, input_txt, candidates, matched, selected_item)
+    
+    if success:
+        # 1. 文章の末尾に絵文字を追加
+        if selected_item != "なし":
+            st.session_state['input_text_val'] += selected_item
+        
+        # 2. 候補リストを削除してリセット
+        del st.session_state['current_candidates']
+        
+        # 3. 成功メッセージを設定
+        st.session_state['save_success'] = f"✅ 「{selected_item}」を選択・記録しました！"
+    else:
+        st.session_state['save_error'] = f"保存エラー: {msg}"
+
 # --- メインUI ---
 
 def main():
     st.set_page_config(page_title="絵文字推薦システム", page_icon="🧐")
     
     st.title("🧐 絵文字推薦システム")
-    st.markdown("文章を入力すると、関連性の高い絵文字を推薦します。")
+    st.markdown("文章を入力すると、単語の出現順に関連する絵文字を表示します。")
 
     with st.sidebar:
         st.header("ステータス")
@@ -145,8 +159,8 @@ def main():
         if 'data_loaded' not in st.session_state:
             with st.spinner("辞書データを構築中..."):
                 try:
-                    emoji_probabilities, all_words, spreadsheet = load_data()
-                    st.session_state['emoji_probabilities'] = emoji_probabilities
+                    emoji_keywords, all_words, spreadsheet = load_data()
+                    st.session_state['emoji_keywords'] = emoji_keywords
                     st.session_state['all_words'] = all_words
                     st.session_state['spreadsheet'] = spreadsheet
                     st.session_state['data_loaded'] = True
@@ -157,7 +171,7 @@ def main():
         else:
             st.success("データ準備OK")
 
-    # --- 入力フォーム (Session Stateと連携) ---
+    # --- 入力フォーム ---
     if 'input_text_val' not in st.session_state:
         st.session_state['input_text_val'] = ""
 
@@ -173,64 +187,38 @@ def main():
         if not input_text:
             st.warning("文章を入力してください。")
         else:
-            emoji_probabilities = st.session_state['emoji_probabilities']
+            emoji_keywords = st.session_state['emoji_keywords']
             all_words = st.session_state['all_words']
 
             # Janomeによる形態素解析
             tokenizer = load_tokenizer()
             tokens = tokenizer.tokenize(input_text)
             
-            found_words = []
+            sorted_words = []
             for token in tokens:
                 word_base = token.base_form
                 if word_base in all_words:
-                    found_words.append(word_base)
+                    sorted_words.append(word_base)
             
-            matched_words_str = ", ".join(found_words) if found_words else "なし"
+            matched_words_str = ", ".join(sorted_words) if sorted_words else "なし"
 
-            # スコア計算
-            scores = {}
-            for emoji, word_probs in emoji_probabilities.items():
-                score = 0.0
-                for word in found_words:
-                    if word in word_probs:
-                        score += word_probs[word]
-                scores[emoji] = score
-
-            # ソートロジックの修正
-            # 1. スコアが高い順 (降順)
-            # 2. スコアが同じなら、SHEET_NAMES のインデックスが小さい順 (昇順)
-            #    → reverse=True でソートするので、インデックスにマイナスをつけて評価させる
-            sorted_emojis = sorted(
-                scores.items(), 
-                key=lambda x: (x[1], -SHEET_NAMES.index(x[0])), 
-                reverse=True
-            )
+            # 絵文字リストアップ
+            candidates = []
+            seen_emojis = set()
+            for word in sorted_words:
+                for emoji, keywords in emoji_keywords.items():
+                    if word in keywords:
+                        if emoji not in seen_emojis:
+                            candidates.append(emoji)
+                            seen_emojis.add(emoji)
             
-            # スコア > 0 のものにフィルタリング
-            valid_emojis = [(emoji, score) for emoji, score in sorted_emojis if score > 0]
-            
-            # 上位5つ + 同率5位のものを含めるロジック
-            final_candidates = []
-            if valid_emojis:
-                # 5位のスコアを取得（データが5個未満なら最後のスコア）
-                # インデックス4が5位。
-                cutoff_index = min(5, len(valid_emojis)) - 1
-                if cutoff_index >= 0:
-                    threshold_score = valid_emojis[cutoff_index][1]
-                    
-                    for emoji, score in valid_emojis:
-                        # 5個未満なら追加、またはスコアが5位以上（同点含む）なら追加
-                        if len(final_candidates) < 5 or score >= threshold_score:
-                            final_candidates.append(emoji)
-                        else:
-                            break
-            
-            st.session_state['current_candidates'] = final_candidates
+            st.session_state['current_candidates'] = candidates
             st.session_state['current_matched'] = matched_words_str
             
             if 'save_success' in st.session_state:
                 del st.session_state['save_success']
+            if 'save_error' in st.session_state:
+                del st.session_state['save_error']
 
     # 結果表示と選択エリア
     if 'current_candidates' in st.session_state:
@@ -248,30 +236,20 @@ def main():
         
         for i, item in enumerate(display_candidates):
             with cols[i % num_cols]:
-                label = item
-                
-                if st.button(label, key=f"btn_{i}", use_container_width=True):
-                    
-                    spreadsheet = st.session_state['spreadsheet']
-                    current_input_val = st.session_state['input_text_val']
-                    matched = st.session_state['current_matched']
-                    candidates_to_log = candidates
-                    
-                    with st.spinner(f"「{item}」を記録中..."):
-                        success, msg = save_log(spreadsheet, current_input_val, candidates_to_log, matched, item)
-                        
-                        if success:
-                            if item != "なし":
-                                st.session_state['input_text_val'] += item
-                            
-                            del st.session_state['current_candidates']
-                            st.session_state['save_success'] = f"✅ 「{item}」を選択・記録しました！"
-                            st.rerun()
-                        else:
-                            st.error(f"保存エラー: {msg}")
+                # ★修正点: on_click を使用してコールバックを設定
+                st.button(
+                    item, 
+                    key=f"btn_{i}", 
+                    use_container_width=True,
+                    on_click=on_emoji_click,  # クリック時に実行する関数
+                    args=(item,)              # 関数に渡す引数（選ばれた絵文字）
+                )
 
+    # 保存結果メッセージの表示
     if 'save_success' in st.session_state:
         st.success(st.session_state['save_success'])
+    if 'save_error' in st.session_state:
+        st.error(st.session_state['save_error'])
 
 if __name__ == "__main__":
     main()
