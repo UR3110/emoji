@@ -10,7 +10,7 @@ import pandas as pd
 # ローカルで動かす場合の鍵ファイル名
 SERVICE_ACCOUNT_FILE = 'service_account.json'
 # ★書き換えてください (スプレッドシートID)
-SPREADSHEET_ID = '1P5Yx7tCPKIzicerO_9LlQBnupqdlDeKnKily2ZzVhYg' 
+SPREADSHEET_ID = '1P5Yx7tCPKIzicerO_9LlQBnupqdlDeKnKily2ZzVhY' 
 
 # 分析対象のシート名（絵文字）リスト
 SHEET_NAMES = [
@@ -199,19 +199,16 @@ def main():
     # 結果表示と選択エリア
     if 'current_candidates' in st.session_state:
         st.divider()
-        st.subheader("👇 最も適した絵文字を選んでください")
-        st.caption("左側ほどおすすめ度が高い絵文字です。")
+        # 以前のサブヘッダーやキャプション表示を削除しました
         
         candidates = st.session_state['current_candidates']
         
         # 候補リストに「なし」を追加して表示用リストを作る
         display_candidates = candidates + ["なし"]
         
-        # 検出単語の表示
+        # 検出単語の表示を削除しました
         if not candidates:
             st.info("※ 単語から推測できる絵文字が見つかりませんでした。")
-        else:
-            st.write(f"検出された単語: {st.session_state['current_matched']}")
 
         # 絵文字ボタンを並べる
         # 最大6個（上位5つ + なし）なので6カラム
@@ -236,13 +233,12 @@ def main():
                         success, msg = save_log(spreadsheet, input_txt, candidates_to_log, matched, item)
                         
                         if success:
-                            st.session_state['save_success'] = f"✅ 「{item}」を選択・記録しました！"
+                            # 完了メッセージの表示ロジックを削除しました
+                            pass
                         else:
                             st.error(f"保存エラー: {msg}")
 
-        # 保存完了メッセージの表示
-        if 'save_success' in st.session_state:
-            st.success(st.session_state['save_success'])
+        # 完了メッセージの表示エリア自体を削除しました
 
 if __name__ == "__main__":
     main()
