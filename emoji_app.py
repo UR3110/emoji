@@ -26,9 +26,19 @@ SHEET_NAMES = [
 
 # --- 関数定義 ---
 
+def parse_probability(prob_str):
+    """確率文字列を数値に変換"""
+    if not prob_str:
+        return 0.0
+    try:
+        clean_str = str(prob_str).replace('%', '').replace(',', '').strip()
+        return float(clean_str) / 100.0
+    except ValueError:
+        return 0.0
+
 @st.cache_resource
 def load_data():
-    """スプレッドシートから学習データを読み込む"""
+    """スプレッドシートから学習データを読み込む (確率スコア付き)"""
     
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
@@ -44,7 +54,8 @@ def load_data():
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
     
-    emoji_keywords = {}
+    # {絵文字: {単語: 確率, ...}} の形式で保持
+    emoji_probabilities = {}
     all_words = set()
     
     progress_bar = st.progress(0)
@@ -61,18 +72,20 @@ def load_data():
                 worksheet = spreadsheet.worksheet(sheet_name)
                 rows = worksheet.get_all_values()
                 
-                keywords = set()
+                emoji_probs = {}
                 start_row = 1 if rows and len(rows) > 0 and len(rows[0]) > 1 and '%' in str(rows[0][1]) else 0
 
                 for row in rows[start_row:]:
+                    # 名詞(0), 動詞(2), 形容詞(4) の列にある単語と確率を取得
                     for col_idx in [0, 2, 4]:
-                        if len(row) > col_idx and row[col_idx]:
+                        if len(row) > col_idx + 1 and row[col_idx] and row[col_idx+1]:
                             word = row[col_idx].strip()
-                            if word:
-                                keywords.add(word)
+                            prob = parse_probability(row[col_idx+1])
+                            if word and prob > 0:
+                                emoji_probs[word] = prob
                                 all_words.add(word)
                 
-                emoji_keywords[sheet_name] = keywords
+                emoji_probabilities[sheet_name] = emoji_probs
                 break
                 
             except gspread.exceptions.WorksheetNotFound:
@@ -85,13 +98,13 @@ def load_data():
             except Exception:
                 break
         
-        time.sleep(1.5)
+        time.sleep(1.5) # API制限回避
         progress_bar.progress((i + 1) / total_sheets)
 
     status_text.empty()
     progress_bar.empty()
     
-    return emoji_keywords, all_words, spreadsheet
+    return emoji_probabilities, all_words, spreadsheet
 
 # Tokenizerのロードをキャッシュ化
 @st.cache_resource
@@ -109,28 +122,26 @@ def save_log(spreadsheet, input_text, candidate_emojis, matched_words_str, selec
             log_sheet.append_row(["タイムスタンプ", "入力テキスト", "推薦候補リスト", "検出された単語", "選択された絵文字"])
         
         timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        candidates_str = ", ".join(candidate_emojis)
+        candidates_str = ", ".join(candidate_emojis) if isinstance(candidate_emojis, list) else str(candidate_emojis)
         
         log_sheet.append_row([timestamp, input_text, candidates_str, matched_words_str, selected_emoji])
         return True, "保存完了"
     except Exception as e:
         return False, str(e)
 
-# --- コールバック関数 (ここが修正のポイント) ---
+# --- コールバック関数 ---
 def on_emoji_click(selected_item):
     """絵文字ボタンが押されたときに実行される関数"""
     
-    # 必要なデータをセッションステートから取得
     spreadsheet = st.session_state['spreadsheet']
     input_txt = st.session_state['input_text_val']
     matched = st.session_state['current_matched']
     candidates = st.session_state['current_candidates']
     
-    # 記録処理 (コールバック内ではspinnerが効かないことがあるため削除していますが処理は行われます)
     success, msg = save_log(spreadsheet, input_txt, candidates, matched, selected_item)
     
     if success:
-        # 1. 文章の末尾に絵文字を追加
+        # 1. 文章の末尾に絵文字を追加 (「なし」以外)
         if selected_item != "なし":
             st.session_state['input_text_val'] += selected_item
         
@@ -148,7 +159,7 @@ def main():
     st.set_page_config(page_title="絵文字推薦システム", page_icon="🧐")
     
     st.title("🧐 絵文字推薦システム")
-    st.markdown("文章を入力すると、単語の出現順に関連する絵文字を表示します。")
+    st.markdown("文章を入力すると、関連度の高い絵文字を推薦します。")
 
     with st.sidebar:
         st.header("ステータス")
@@ -159,8 +170,8 @@ def main():
         if 'data_loaded' not in st.session_state:
             with st.spinner("辞書データを構築中..."):
                 try:
-                    emoji_keywords, all_words, spreadsheet = load_data()
-                    st.session_state['emoji_keywords'] = emoji_keywords
+                    emoji_probabilities, all_words, spreadsheet = load_data()
+                    st.session_state['emoji_probabilities'] = emoji_probabilities
                     st.session_state['all_words'] = all_words
                     st.session_state['spreadsheet'] = spreadsheet
                     st.session_state['data_loaded'] = True
@@ -187,32 +198,42 @@ def main():
         if not input_text:
             st.warning("文章を入力してください。")
         else:
-            emoji_keywords = st.session_state['emoji_keywords']
+            emoji_probabilities = st.session_state['emoji_probabilities']
             all_words = st.session_state['all_words']
 
-            # Janomeによる形態素解析
+            # 1. 単語抽出 (Janome)
             tokenizer = load_tokenizer()
             tokens = tokenizer.tokenize(input_text)
             
-            sorted_words = []
+            found_words = []
             for token in tokens:
                 word_base = token.base_form
                 if word_base in all_words:
-                    sorted_words.append(word_base)
+                    found_words.append(word_base)
             
-            matched_words_str = ", ".join(sorted_words) if sorted_words else "なし"
+            matched_words_str = ", ".join(found_words) if found_words else "なし"
 
-            # 絵文字リストアップ
-            candidates = []
-            seen_emojis = set()
-            for word in sorted_words:
-                for emoji, keywords in emoji_keywords.items():
-                    if word in keywords:
-                        if emoji not in seen_emojis:
-                            candidates.append(emoji)
-                            seen_emojis.add(emoji)
+            # 2. スコア計算 (確率の合計)
+            scores = {}
+            for emoji, word_probs in emoji_probabilities.items():
+                score = 0.0
+                for word in found_words:
+                    if word in word_probs:
+                        score += word_probs[word]
+                scores[emoji] = score
+
+            # 3. スコア順にソート
+            # 同率の場合はシート順序(SHEET_NAMESのindex)で安定ソート
+            sorted_emojis = sorted(
+                scores.items(), 
+                key=lambda x: (x[1], -SHEET_NAMES.index(x[0])), 
+                reverse=True
+            )
             
-            st.session_state['current_candidates'] = candidates
+            # 上位5つを抽出 (スコア0を除く)
+            top5_candidates = [emoji for emoji, score in sorted_emojis if score > 0][:5]
+            
+            st.session_state['current_candidates'] = top5_candidates
             st.session_state['current_matched'] = matched_words_str
             
             if 'save_success' in st.session_state:
@@ -225,6 +246,8 @@ def main():
         st.divider()
         
         candidates = st.session_state['current_candidates']
+        
+        # 候補リストに「なし」を追加して表示用リストを作る
         display_candidates = candidates + ["なし"]
         
         if not candidates:
@@ -236,16 +259,14 @@ def main():
         
         for i, item in enumerate(display_candidates):
             with cols[i % num_cols]:
-                # ★修正点: on_click を使用してコールバックを設定
                 st.button(
                     item, 
                     key=f"btn_{i}", 
                     use_container_width=True,
-                    on_click=on_emoji_click,  # クリック時に実行する関数
-                    args=(item,)              # 関数に渡す引数（選ばれた絵文字）
+                    on_click=on_emoji_click,
+                    args=(item,)
                 )
 
-    # 保存結果メッセージの表示
     if 'save_success' in st.session_state:
         st.success(st.session_state['save_success'])
     if 'save_error' in st.session_state:
