@@ -145,10 +145,12 @@ def on_emoji_click(selected_item):
         if selected_item != "なし":
             st.session_state['input_text_val'] += selected_item
         
-        # 2. 候補リストを削除してリセット
-        del st.session_state['current_candidates']
+        # 2. 候補リストを削除しない！ (ここが修正ポイント)
+        # 連続して他の絵文字も選べるように、current_candidates は残します。
+        # del st.session_state['current_candidates'] 
         
-        # 3. 成功メッセージの設定を削除しました
+        # 3. 成功メッセージの設定（控えめに）
+        st.session_state['save_success'] = f"✅ 「{selected_item}」を追加しました"
     else:
         st.session_state['save_error'] = f"保存エラー: {msg}"
 
@@ -212,7 +214,7 @@ def main():
             
             matched_words_str = ", ".join(found_words) if found_words else "なし"
 
-            # 2. スコア計算 (確率の合計)
+            # 2. スコア計算
             scores = {}
             for emoji, word_probs in emoji_probabilities.items():
                 score = 0.0
@@ -222,19 +224,21 @@ def main():
                 scores[emoji] = score
 
             # 3. スコア順にソート
-            # 同率の場合はシート順序(SHEET_NAMESのindex)で安定ソート
             sorted_emojis = sorted(
                 scores.items(), 
                 key=lambda x: (x[1], -SHEET_NAMES.index(x[0])), 
                 reverse=True
             )
             
-            # 上位5つを抽出 (スコア0を除く)
+            # 上位5つ
             top5_candidates = [emoji for emoji, score in sorted_emojis if score > 0][:5]
             
             st.session_state['current_candidates'] = top5_candidates
             st.session_state['current_matched'] = matched_words_str
             
+            # メッセージをリセット
+            if 'save_success' in st.session_state:
+                del st.session_state['save_success']
             if 'save_error' in st.session_state:
                 del st.session_state['save_error']
 
@@ -243,8 +247,6 @@ def main():
         st.divider()
         
         candidates = st.session_state['current_candidates']
-        
-        # 候補リストに「なし」を追加して表示用リストを作る
         display_candidates = candidates + ["なし"]
         
         if not candidates:
@@ -264,6 +266,10 @@ def main():
                     args=(item,)
                 )
 
+    if 'save_success' in st.session_state:
+        st.toast(st.session_state['save_success']) # トースト表示に変更して邪魔にならないように
+        del st.session_state['save_success']
+        
     if 'save_error' in st.session_state:
         st.error(st.session_state['save_error'])
         del st.session_state['save_error']
