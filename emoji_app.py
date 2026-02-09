@@ -195,7 +195,7 @@ def main():
     )
 
     # 「絵文字を検索する」ボタン
-    if st.button("絵文字を検索する", type="primary"):
+    if st.button("絵文字を推薦する", type="primary"):
         if not input_text:
             st.warning("文章を入力してください。")
         else:
