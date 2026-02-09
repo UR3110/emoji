@@ -247,13 +247,14 @@ def main():
         st.divider()
         
         candidates = st.session_state['current_candidates']
-        display_candidates = candidates + ["なし"]
+        display_candidates = candidates
+        # +  [なし]
         
         if not candidates:
             st.info("※ 単語から推測できる絵文字が見つかりませんでした。")
 
         # 絵文字ボタンを並べる
-        num_cols = 6
+        num_cols = 5
         cols = st.columns(num_cols) 
         
         for i, item in enumerate(display_candidates):
